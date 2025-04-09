@@ -1,9 +1,9 @@
 #%%
 print("hello")
 # %%
-pip install jupyterlab
+!pip install jupyterlab
 #%%
-pip install ttslearn
+!pip install ttslearn
 
 #%%
 #code4.1
@@ -44,6 +44,11 @@ ax.set_ylabel("Amplitude")
 
 #音声ファイルの読み込み
 sr , x = wavfile.read(ttslearn.util.example_audio_file())
+
+#code4.12と13でのエラーを解消するため．
+x = x.astype(np.float32) / np.iinfo(x.dtype).max
+
+
 #振幅スペクトル
 X = np.abs(np.fft.rfft(x))
 #対数振幅スペクトル
@@ -75,7 +80,7 @@ def stft(x, N, S):
   #短時間フーリエ変換のフレーム数
   M = (len(x) - N) // S + 1
   #短時間フーリエ変換の結果格納用の2次元配列．datatypeが複素数で，周期性や対称性により半分（以上）になっている．
-  X = np.zeros((M, N//2 + 1), dtype = np.complex)
+  X = np.zeros((M, N//2 + 1), dtype = np.complex128)
   #音声をずらして切り出し，フーリエ変換
   for m in range(M):
     x_m = w * x[m*S:m*S+N]
@@ -93,7 +98,7 @@ X = stft(x.astype(np.float32), n_fft, frame_shift)
 #対数振幅に変換．librosa.amplitude_to_db() は 10 * log10(振幅 / ref) を計算する関数．np.abs(X)で実部と虚部の平方２乗和すなわちスペクトルを取得している．refはreference valueの略でdefaultは振幅の値が1.0．この最大を0とすることで他の振幅がそれよりどの程度小さいかを示している．
 logX = librosa.amplitude_to_db(np.abs(X), ref = np.max)
 
-fig , ax = plt.subplots(1, 1, figsize = (8. 4), sharex = True)
+fig , ax = plt.subplots(1, 1, figsize = (8, 4), sharex = True)
 #周波数数×フレーム数に変換するため転置を取る
 img = librosa.display.specshow(logX.T, hop_length = frame_shift, sr = sr, x_axis = "time", y_axis = "hz", ax = ax)
 
@@ -114,6 +119,7 @@ import librosa
 X = librosa.stft(x.astype(np.float32), n_fft = n_fft, win_length = n_fft, hop_length =frame_shift, window = "hann", center = False).T
 #%%
 #code4.12 音声の短時間フーリエ変換およびその逆変換
+import IPython.display
 
 #STFT
 X = librosa.stft(x, n_fft=n_fft, win_length=n_fft, hop_length=frame_shift, window="hann")
@@ -133,5 +139,6 @@ X = librosa.stft(x, n_fft=n_fft, hop_length=frame_shift)
 
 #80次元のメルスペクトログラム
 n_mels = 80
-melfb = librosa.filters.mel(sr, n_fft, n_mels=n_mels)
+melfb = librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=n_mels)
 melspec = librosa.amplitude_to_db(np.dot(melfb, np.abs(X)), ref=np.max)
+# %%
