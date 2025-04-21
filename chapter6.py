@@ -151,31 +151,49 @@ print(result.stdout)
 print("\n標準エラー:")
 print(result.stderr)
 # %%
+#code6.4
+import ttslearn
+import librosa
+from scipy.io import wavfile
+import numpy as np
+from nnmnkwii.frontend import merlin as fe
+from nnmnkwii.io import hts
 from ttslearn.dsp import world_spss_params
 
+#音声のフルコンテキストラベルの読み込み
+labels = hts.load(ttslearn.util.example_label_file())
+
 #音響モデルの入力:言語特徴量
-in_feats = fe.linguistic_features(labels, binary_dict, numeric_dict, add_frame_features=True, subphone_features="corase_coding")
+#add_frame_features=Trueは音素単位の特徴量をフレーム単位に展開しており，subphone_features="coarse_coding"はその際に書く音素内における洗位置情報を付加することを意味している．
+in_feats = fe.linguistic_features(labels, binary_dict, numeric_dict, add_frame_features=True, subphone_features="coarse_coding")
 
 #音声の読み込み
-_sr, x = wavfile.read(ttslearn.util.example_wav_file())
+#example_wav_file→example_audio_fileに変更
+_sr, x = wavfile.read(ttslearn.util.example_audio_file())
 sr = 16000
+#浮動少数（-1.0〜1.0）に変換
 x = (x / 32768).astype(np.float64)
-x = librosa.resample(x, _sr, sr)
+x = librosa.resample(x, orig_sr=_sr, target_sr=sr)
 
 #音響モデルの出力:音響特徴量
 out_feats = world_spss_params(x, sr)
 
-#フレーム数の調整
+#フレーム数の調整で，短い方に合わせる．
 minL = min(in_feats.shape[0], out_feats.shape[0])
 in_feats = in_feats[:minL]
 out_feats = out_feats[:minL]
 
 #冒頭と末尾の非音声区間の長さを調整
-assert "sil" in labels.contexts[0] and "sil" in labels.context[-1]
+#1フレームは50ミリ秒=50000ナノ秒
+#最初の音素と最後の音素に無音があるかを確認
+assert "sil" in labels.contexts[0] and "sil" in labels.contexts[-1]
+#第2番目の音素（先頭のsilの次）の開始時刻
 start_frame = int(labels.start_times[1]/50000)
+#最後から2番目の音素（末尾のsilの前）の終了時刻
 end_frame = int(labels.end_times[-2]/50000)
+#実音声部分の開始と終了のフレーム番号
 
-#冒頭50ミリ秒，末尾100ミリ秒
+#冒頭50ミリ秒，末尾100ミリ秒の余裕を持たせる．非音声区間の長さを統一して学習データ量の削減をする．
 start_frame = max(0, start_frame - int(0.050/0.005))
 end_frame = min(minL, end_frame + int(0.100/0.005))
 
@@ -183,4 +201,35 @@ in_feats = in_feats[start_frame:end_frame]
 out_feats = out_feats[start_frame:end_frame]
 
 
+#継続帳モデルより4ずつ増えているが，音素内のフレーム単位の位置特徴量が追加されたことに起因．
+print("入力特徴量のサイズ:", in_feats.shape)
+print("出力特徴量のサイズ:", out_feats.shape)
+
+from ttslearn.dnntts.multistream import get_static_features
+
+#動的特徴量を除いて，各音響特徴量を取り出す．
+mgc, lf0, vuv, bap = get_static_features(out_feats, num_windows=3, stream_sizes=[120, 3, 1, 3], has_dynamic_features=[True, True, False, True])
+print("メルケプストラムのサイズ:", mgc.shape)
+print("連続対数基本周波数のサイズ:", lf0.shape)
+print("有声/無声フラグのサイズ:", vuv.shape)
+print("帯域非周期性指標のサイズ:", bap.shape)
+# %%
+#code6.4.stage2
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "2", "--stop-stage", "2"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
 # %%
