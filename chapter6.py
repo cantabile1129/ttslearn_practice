@@ -152,6 +152,8 @@ print("\n標準エラー:")
 print(result.stderr)
 # %%
 #code6.4
+#import漏れが多すぎる
+
 import ttslearn
 import librosa
 from scipy.io import wavfile
@@ -214,7 +216,7 @@ print("連続対数基本周波数のサイズ:", lf0.shape)
 print("有声/無声フラグのサイズ:", vuv.shape)
 print("帯域非周期性指標のサイズ:", bap.shape)
 # %%
-#code6.4.stage2
+#code6.5.stage2
 import subprocess
 import os
 
@@ -232,4 +234,136 @@ print(result.stdout)
 
 print("\n標準エラー:")
 print(result.stderr)
+# %%
+#code6.5
+#正規化のための特徴量の計算のコマンドラインプログラム
+import numpy as np
+import joblib
+from sklearn.preprocessing import StandardScaler
+
+#Jupyterでargparseなしで引数を模倣
+from types import SimpleNamespace
+from pathlib import Path
+
+from tqdm import tqdm
+
+args = SimpleNamespace(
+    utt_list="/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts/data/utt_list.txt",
+    in_dir="/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts/data/in_duration",
+    out_path="/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts/data/in_scaler.joblib"
+)
+
+# 特徴量正規化のスケーラー作成
+#ディレクトリをPathオブジェクトに変換
+in_dir = Path(args.in_dir)
+#平均と標準偏差の記録
+scaler = StandardScaler()
+
+# 発話IDのリストを読み込む
+#ファイルを開き，fを通して中身を使う
+with open(args.utt_list) as f:
+    for utt_id in tqdm(f):
+        utt_id = utt_id.strip()
+        feat_path = in_dir / f"{utt_id}-feats.npy"
+        #2次元のはず
+        c = np.load(feat_path)
+        scaler.partial_fit(c)
+
+# スケーラーを保存
+joblib.dump(scaler, args.out_path)
+#計算したスケーラーをjoblibで保存
+print(f"Saved scaler to: {args.out_path}")
+# %%
+#code6.6.stage3
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "3", "--stop-stage", "3"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+# %%
+#code6.6
+import torch
+import torch.nn as nn
+class DNN(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, num_layers=2):
+        #親クラス（nn.Module）を呼び出し，初期設定をする
+        super(DNN, self).__init__()
+        model = [nn.Linear(in_dim, hidden_dim), nn.ReLU()]
+        #ループ変数は使わないので_にしている
+        for _ in range(num_layers):
+            model.append(nn.Linear(hidden_dim, hidden_dim))
+            model.append(nn.ReLU())
+        model.append(nn.Linear(hidden_dim, out_dim))
+        #リストで作った以下の層を，順番にまとめて一つのネットワークとして定義．nn.Sequential()は複数のレイヤーを順番に流すためのラッパーで，*modelはリストの中身を展開（アンパック）する．
+        """
+            model = [
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            ...
+            nn.Linear(hidden_dim, out_dim)
+            ]
+        """
+        self.model = nn.Sequential(*model)
+        
+    def forward(self, x, lens=None):
+        return self.model(x)
+
+# %%
+#code6.7
+import torch
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+
+class LSTMRNN(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, num_layers=1, bidirectional=True, dropout=0.0):
+        super(LSTMRNN, self).__init__()
+        self.num_direction = 2 if bidirectional else 1
+        #入力の形が(batch, time, feature)．bidirectional引数で片方向か双方向か切り替える．
+        self.lstm = nn.LSTM(in_dim, hidden_dim, num_layers=num_layers, bidirectional=bidirectional, batch_first=True, dropout=dropout)
+        #LSTMの出力は隠れ状態の数×2（双方向）で，出力次元はout_dim
+        self.hidden2out = nn.Linear(hidden_dim * self.num_direction, out_dim)
+
+    def forward(self, seqs, lens):
+        # pack_padded_sequenceは，長さの異なる系列をバッチ処理するために必要な前処理．
+        # lensに基づきパディングを無視できる圧縮表現に変換する．無駄なゼロをLSTMに見せないことで，効率的に学習できる．
+        seqs = pack_padded_sequence(seqs, lens, batch_first=True)
+        out, _ = self.lstm(seqs)
+        #元の長さ＋パディングありの形状に戻す
+        #(batch_size, max_seq_len, hidden_dim * num_direction)
+        out, _ = pad_packed_sequence(out, batch_first=True)
+        #outはLSTMの出力で，最後の隠れ状態を取り出す．
+        out = self.hidden2out(out)
+        return out
+# %%
+#code6.8
+#PytorchのDataLoaderを用いるためにDatasetクラスを定義する
+import torch
+from torch.utils import data as data_utils
+
+class Dataset(data_utils.Dataset):
+    #in_pathsは入力特徴量の.npyファイルのパス一覧で，out_pathsは出力特徴量の.npyファイルのパス一覧
+    def __init__(self, in_paths, out_paths):
+        self.in_paths = in_paths
+        self.out_paths = out_paths
+        
+    # 指定したインデックスの入出力ファイルを読み込み，1ペアのデータ（Numpy配列）として返す．
+    def __getitem__(self, idx):
+        return np.load(self.in_paths[idx]), np.load(self.out_paths[idx])
+    
+    # データセットの長さ（サンプル数）を返す．
+    def __len__(self):
+        return len(self.in_paths)
 # %%
