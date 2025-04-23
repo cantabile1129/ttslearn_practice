@@ -1,0 +1,10 @@
+#code6.14
+defaults:
+  - params: exp1
+
+
+#code6.12
+params:
+  batch_size: 16
+  learning_rate: 0.01
+

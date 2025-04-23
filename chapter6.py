@@ -366,4 +366,90 @@ class Dataset(data_utils.Dataset):
     # データセットの長さ（サンプル数）を返す．
     def __len__(self):
         return len(self.in_paths)
+
+#%%
+#code6.9
+#エラー解消できず
+from pathlib import Path
+from ttslearn.util import pad_2d
+import numpy as np
+
+def collate_fn_dnntts(batch):
+    lengths = [len(x[0]) for x in batch]
+    #paddingの目標長は，バッチ内の系列長の最大値
+    max_len = max(lengths)
+    #code6.8でペアにしていたように，x[0]は入力で，x[1]は出力
+    #パディングした配列をテンソルに変換し，それを3次元テンソル(B, T_max, D)にまとめる
+    x_batch = torch.stack([torch.from_numpy(pad_2d(x[0], max_len)) for x in batch])
+    y_batch = torch.stack([torch.from_numpy(pad_2d(x[1], max_len)) for x in batch])
+    #元の系列長（padding前）をテンソル化
+    lengths = torch.tensor(lengths, dtype=torch.long)
+    return x_batch, y_batch, lengths
+
+#in_pathsとout_pathsの定義が必要
+in_paths = sorted(Path("/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts/dump/jsut_sr16000/norm/dev/in_duration").glob("*.npy"))
+out_paths = sorted(Path("/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts/dump/jsut_sr16000/norm/dev/in_duration").glob("*.npy"))
+
+dataset = Dataset(in_paths, out_paths)
+#num_worker=0でプロセス並列化しないことを指定
+
+data_loader = data_utils.DataLoader(dataset, batch_size=8, collate_fn=collate_fn_dnntts, num_workers=0)
+in_feats, out_feats, lengths = next(iter(data_loader))
+
+print("入力特徴量のサイズ:", tuple(in_feats.size()))
+print("出力特徴量のサイズ:", tuple(out_feats.size()))
+print("系列長のサイズ:", tuple(lengths.size()))
+# %%
+#code6.10
+from ttslearn.dnntts import DNN
+from torch import optim
+
+model = DNN(in_dim=325, hidden_dim=64, out_dim=1, num_layers=2)
+
+#lrは学習率
+optimizer = optim.Adam(model.parameters(), lr=0.01)
+
+#gammaは学習率の減衰係数を表す
+lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+
+# %%
+#code6.11
+#DataLoaderを用いたミニバッチの作成
+import torch.nn as nn
+
+for in_feats, out_feats, lengths in data_loader:
+    #順伝播
+    pred_out_feats = model(in_feats, lengths)
+    #損失
+    loss = nn.MSELoss()(pred_out_feats, out_feats)
+    #optimizerに蓄積された勾配をリセット
+    optimizer.zero_grad()
+    #逆伝播
+    loss.backward()
+    #パラメータの更新
+    optimizer.step()
+
+# %%
+#code6.12
+#/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/conf_chapter6/config.yaml
+
+#%%
+#code6.13
+#以下はJupyterでのHydraの使い方だが，今後はpy_chapter6に移動．
+
+import hydra 
+from omegaconf import DictConfig, OmegaConf
+
+#hydra.mainをJupyter対応させるAP
+from hydra import initialize, compose
+
+#以下Jupyter用
+# 1. 初期化：configファイルのディレクトリを指定（相対パス or 絶対パス）
+initialize(config_path="conf_chapter6")
+# 2. 設定ファイルの読み込み（ファイル名から .yaml は省略する）
+# overrideで，Jupyter形式のpy形式やipynb形式ではできないコマンド引数からの設定変更の代替となる．
+cfg: DictConfig = compose(config_name="config", overrides=["train.batch_size=32", "model.hidden_dim=256"])
+# 3. 表示（YAML形式で見やすく出力）
+print(OmegaConf.to_yaml(cfg))
+
 # %%

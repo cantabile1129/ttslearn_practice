@@ -1,0 +1,2 @@
+- params.batch_size=128
+- params.learning_rate=0.1
