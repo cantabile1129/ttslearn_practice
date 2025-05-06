@@ -369,9 +369,8 @@ class Dataset(data_utils.Dataset):
 
 #%%
 #code6.9
-#エラー解消できず
 from pathlib import Path
-from ttslearn.util import pad_2d
+from ttslearn.ttslearn.util import pad_2d
 import numpy as np
 
 def collate_fn_dnntts(batch):
@@ -452,4 +451,160 @@ cfg: DictConfig = compose(config_name="config", overrides=["train.batch_size=32"
 # 3. 表示（YAML形式で見やすく出力）
 print(OmegaConf.to_yaml(cfg))
 
+# %%
+#code6.19
+from hydra.utils import to_absolute_path
+from omegaconf import OmegaConf
+#相対パスなので変更．
+from ttslearn.ttslearn.util import load_utt_list
+import numpy as np
+
+def get_data_loaders(data_config, collate_fn):
+    #データローダーの作成
+    data_loaders = {}
+    for phase in ["train", "dev"]:
+        utt_ids = load_utt_list(to_absolute_path(data_config[phase].utt_list))
+        in_dir = Path(to_absolute_path(data_config[phase].in_dir))
+        out_dir = Path(to_absolute_path(data_config[phase].out_dir))
+        
+        in_feats_paths = [in_dir / f"{utt_id}-feats.npy" for utt_id in utt_ids]
+        out_feats_paths = [out_dir / f"{utt_id}-feats.npy" for utt_id in utt_ids]
+        dataset = Dataset(in_feats_paths, out_feats_paths)
+        data_loaders[phase] = data_utils.Dataloader(dataset, batch_size=data_config[phase].batch_size, collate_fn=collate_fn, pin_memory=True, num_workers=data_config[phase].num_workers, shuffle=phase.startswith("train"))
+    return data_loaders
+# %%
+#code6.20
+!pip install tensorboard
+
+import torch
+#学習経過の可視化
+from torch.utils.tensorboard import SummaryWriter
+#ログフォーマットの設定
+from ttslearn.ttslearn.logger import getLogger
+
+def setup(config, device, collate_fn):
+    logger = getLogger(config.verbose)
+    #CUDA周りの設定
+    if torch.cuda.is_available():
+        from torch.backends import cudnn
+        #最速のアルゴリズムを選択．
+        cudnn.benchmark = config.cudnn.benchmark
+        cudnn.deterministic = config.cudnn.deterministic
+    
+    #モデルのインスタンス化
+    #to(device)でCPU/CPUに転送．
+    modef = hydra.utils.instantiate(config.model.netG).to(device)
+    
+    #Optimizer
+    #**で展開して渡す．
+    optimizer_class = getattr(optim, config.train.optim.optimizer.name)
+    optimizer = optimizer_class(model.parameters(), **config.train.optim.optimizer.params)
+    
+    #Scheduler
+    lr_scheduler_class = getattr(optim.lr_scheduler, config.train.optim.scheduler.name)
+    lr_scheduler = lr_scheduler_class(optimizer, **config.train.optim.scheduler.params)
+    
+    #DataLoader
+    #collate_fnはバッチの結合方法を定義（音声では重要）．
+    data_loaders = get_data_loaders(config.data, collate_fn)
+    
+    #TensorBoard
+    #可視化された情報をlog_dirに保存．
+    writer = SummaryWriter(log_dir=to_absolute_path(config.train.log_dir))
+    
+    #configファイルに保存しておく
+    out_dir = Path(to_absolute_path(config.train.out_dir))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "model.yaml", "w") as f:
+        OmegaConf.save(config, f)
+    with open(out_dir / "config.yaml", "w") as f:
+        OmegaConf.save(config, f)
+        
+    return model, optimizer, lr_scheduler, data_loaders, writer, logger
+# %%
+#code6.21
+#collate_fn_dnnttsはcode6.9，setupはcode6.20を参照
+!pip install numpy
+!pip install torch
+
+!pip install hydra-core
+!pip install omegaconf
+from omegaconf import DictConfig, OmegaConf
+
+!pip install matplotlib
+
+import sys
+sys.path.append("./ttslearn")
+
+from ttslearn.ttslearn.train_util import collate_fn_dnntts, save_checkpoint, setup
+from ttslearn.ttslearn.util import make_non_pad_mask
+
+
+def train_step(model, optimizer, train, in_feats, out_feats, lens):
+    #順伝播
+    pred_out_feats = model(in_feats, lens)
+    
+    #ゼロパディング（音響特徴量は系列の長さが発話ごとに異なるので，一番長いものに合わせる）された部分を損失の計算に含めないようにマスクを作成．
+    #Trueが有効な部分で，Falseがパディング部分．
+    #.unsqueeze(-1)で次元を追加し，(B, T, 1)の形にする．-1は最後の次元を意味する．次元の数が1でDとは異なっても，ブロードキャストで計算可能．
+    #.to(in_feats.device)で，GPU/CPUの計算デバイスに合わせてマスクを送ります．
+    mask = make_non_pad_mask(lengths).unsqueeze(-1).to(in_feats.device)
+    #masked_selectはPyTorchのTensorのメソッド．
+    pred_out_feats = pred_out_feats.masked_select(mask)
+    out_feats = out_feats.masked_select(mask)
+    
+    #損失の計算
+    loss = nn.MSELoss()(pred_out_feats, out_feats)
+    
+    #逆伝播，モデルパラメータの更新（Trueのときのみ）
+    if train:
+        loss.backward()
+        optimizer.step()
+        
+    return loss
+
+def train_loop(config, logger, device, model, optimizer, lr_scheduler, data_loaders, writer):
+    out_dir = Path(to_absolute_path(config.train.out_dir))
+    #float32の最大値を取得
+    best_loss = torch.finfo(torch.float32).max
+    
+    for epoch in range(1, config.train.epochs + 1):
+        #data_loadersはcode6.19を参照
+        for phase in data_loaders.keys():
+            train = phase.startswith("train")
+            model.train() if train else model.eval()
+            running_loss = 0
+            for in_feats, out_feats, lengths in data_loaders[phase]:
+                #NOTE:PytorchのPackedSequenceの仕様に合わせるため，系列長の降順にソート．
+                #RNNの計算をcuDNNによって計算するために必要．
+                lengths, ind = torch.sort(lengths, dim = 0, descending=True)
+                in_feats, out_feats = in_feats[ind].to(device), out_feats[ind].to(device)
+                loss = train_step(model, optimizer, train, in_feats, out_feats, lengths)
+                running_loss += loss.item()
+            ave_loss = running_loss / len(data_loader[phase])
+            #TensorBoardに可視化する情報．一番左はLoss/trainやLoss/devなどの名前．
+            writer.add_scalar(f"Loss/{phase}", ave_loss, epoch)
+            if not train and ave_loss < best_loss:
+                best_loss = ave_loss
+                save_checkpoint(logger, out_dir, model, optimizer, epoch, is_best=True)
+        
+        #学習率の更新            
+        lr_scheduler.step()
+        #checkpoint_epoch_intervalごとに学習中のモデルを保存．
+        if epoch % config.train.checkpoint_epoch_interval == 0:
+            save_checkpoint(logger, out_dir, model, optimizer, epoch, is_best=False)
+    save_checkpoint(logger, out_dir, model, optimizer, epoch, is_best=False)
+@hydra.main(config_path="conf/train_dnntts", config_name="config")
+
+#deviceはGPU/CPUの計算デバイスを指定する．
+#Hydraによって自動的にYAMLを受け取り，学習全体を実行します．
+def my_app(config: DictConfig) -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, optimizer, lr_scheduler, data_loaders, writer, logger = setup(config, device, collate_fn_dnntts)
+    train_loop(config, logger, device, model, optimizer, lr_scheduler, data_loaders, writer)
+    
+if __name__ == "__main__":
+    my_app()
+                    
+    
 # %%

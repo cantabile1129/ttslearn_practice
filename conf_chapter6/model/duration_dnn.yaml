@@ -1,3 +1,4 @@
+#code6.15
 netG:
   #pythonでいうimportで，ttslearnというモジュールのdnnttsというサブモジュールのDNNクラスを呼び出す．
   _target_: ttslearn.dnntts.DNN
