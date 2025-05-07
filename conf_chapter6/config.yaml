@@ -9,7 +9,13 @@ params:
   learning_rate: 0.01
 
 #code6.16
+#defaults:
+#  - model: duration_dnn
+
 defaults:
+  - _self_
+  - train_dnntts/config
+  - params: params
   - model: duration_dnn
 
 #ログ出力の詳細度を設定しており，100だと非常に詳細にデバッグや処理の進行状況が確認できる．
@@ -30,7 +36,7 @@ cudnn:
 data:
   #training set
   train:
-    utt:list: data/train.list
+    utt_list: data/train.list
     in_dir:
     out_dir:
 

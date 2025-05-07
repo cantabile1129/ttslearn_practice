@@ -370,7 +370,7 @@ class Dataset(data_utils.Dataset):
 #%%
 #code6.9
 from pathlib import Path
-from ttslearn.ttslearn.util import pad_2d
+from ttslearn.util import pad_2d
 import numpy as np
 
 def collate_fn_dnntts(batch):
@@ -445,9 +445,11 @@ from hydra import initialize, compose
 #以下Jupyter用
 # 1. 初期化：configファイルのディレクトリを指定（相対パス or 絶対パス）
 initialize(config_path="conf_chapter6")
+
 # 2. 設定ファイルの読み込み（ファイル名から .yaml は省略する）
 # overrideで，Jupyter形式のpy形式やipynb形式ではできないコマンド引数からの設定変更の代替となる．
 cfg: DictConfig = compose(config_name="config", overrides=["train.batch_size=32", "model.hidden_dim=256"])
+
 # 3. 表示（YAML形式で見やすく出力）
 print(OmegaConf.to_yaml(cfg))
 
@@ -456,7 +458,7 @@ print(OmegaConf.to_yaml(cfg))
 from hydra.utils import to_absolute_path
 from omegaconf import OmegaConf
 #相対パスなので変更．
-from ttslearn.ttslearn.util import load_utt_list
+from ttslearn.util import load_utt_list
 import numpy as np
 
 def get_data_loaders(data_config, collate_fn):
@@ -480,7 +482,7 @@ import torch
 #学習経過の可視化
 from torch.utils.tensorboard import SummaryWriter
 #ログフォーマットの設定
-from ttslearn.ttslearn.logger import getLogger
+from ttslearn.logger import getLogger
 
 def setup(config, device, collate_fn):
     logger = getLogger(config.verbose)
@@ -524,20 +526,22 @@ def setup(config, device, collate_fn):
 # %%
 #code6.21
 #collate_fn_dnnttsはcode6.9，setupはcode6.20を参照
-!pip install numpy
-!pip install torch
 
-!pip install hydra-core
-!pip install omegaconf
+#以下のようなエラー．
+#r9y9既存のファイルでの呼び出す関数の相対パスが違うが，構造を変えていない...そこを修正するしかない？
+
+import torch
+import torch.nn as nn
+from pathlib import Path
+
 from omegaconf import DictConfig, OmegaConf
-
-!pip install matplotlib
+from hydra.utils import to_absolute_path
 
 import sys
 sys.path.append("./ttslearn")
 
-from ttslearn.ttslearn.train_util import collate_fn_dnntts, save_checkpoint, setup
-from ttslearn.ttslearn.util import make_non_pad_mask
+from ttslearn.train_util import collate_fn_dnntts, save_checkpoint, setup
+from ttslearn.util import make_non_pad_mask
 
 
 def train_step(model, optimizer, train, in_feats, out_feats, lens):
@@ -594,7 +598,11 @@ def train_loop(config, logger, device, model, optimizer, lr_scheduler, data_load
         if epoch % config.train.checkpoint_epoch_interval == 0:
             save_checkpoint(logger, out_dir, model, optimizer, epoch, is_best=False)
     save_checkpoint(logger, out_dir, model, optimizer, epoch, is_best=False)
-@hydra.main(config_path="conf/train_dnntts", config_name="config")
+    
+#以下を削除．
+    """
+    @hydra.main(config_path="conf-chapter6/train_dnntts", config_name="config")
+    """
 
 #deviceはGPU/CPUの計算デバイスを指定する．
 #Hydraによって自動的にYAMLを受け取り，学習全体を実行します．
@@ -602,9 +610,158 @@ def my_app(config: DictConfig) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, optimizer, lr_scheduler, data_loaders, writer, logger = setup(config, device, collate_fn_dnntts)
     train_loop(config, logger, device, model, optimizer, lr_scheduler, data_loaders, writer)
+
+#code6.13でinitializeしたのでリセット．
+
+from hydra.core.global_hydra import GlobalHydra
+
+if GlobalHydra.instance().is_initialized():
+    GlobalHydra.instance().clear()
     
+#conf_chapter6/conf/train_dnntts/config.yaml
+
 if __name__ == "__main__":
-    my_app()
+    with initialize(config_path="conf_chapter6"):
+        cfg = compose(config_name="config")
+        print(OmegaConf.to_yaml(cfg))
+        my_app(cfg)
                     
+# %%
+#code6.stage-4
+#コマンドラインではなくセルで実行できるように調整
+#notionの通りステージが-1から6まであり，順番に実行．
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "4", "--stop-stage", "4"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+
+# %%
+#code6.TensorBoard
+#ブラウザ上でTensorBoardを開きたい．
+
+import subprocess
+import webbrowser
+import time
+
+# TensorBoard起動（非同期）
+subprocess.Popen(["tensorboard", "--logdir=tensorboard/"])
+
+# 少し待ってからブラウザを開く
+time.sleep(2)
+webbrowser.open("http://localhost:6006/")
+
+
+
+# %%
+#code6.stage-5
+#コマンドラインではなくセルで実行できるように調整
+#notionの通りステージが-1から6まであり，順番に実行．
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "5", "--stop-stage", "5"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+# %%
+#code6.24
+#予測時は重みの更新は必要ないので，勾配を保持しない．
+import torch
+@torch.no_grad()
+def predict_duration(
+    device, #cpu or cuda
+    labels, #フルコンテキストラベル
+    duration_model, #学習済継続長モデル
+    duration_config, #継続長モデルの設定
+    duration_in_scaler, #言語特徴量の正規化用StandardScaler
+    duration_out_scaler, #音素継続長の正規化用StandardScaler
+    binary_dict, #二値特徴量を抽出する正規表現
+    numeric_Dict, #数値特徴量を抽出する正規表現
+):
     
+    #言語特徴量の抽出
+    in_feats = fe.linguistic_features(labels, binary_dict, numeric_dict).astype(np.float32)
+    
+    #言語特徴量の正規化
+    #code6.5を参照．
+    in_feats = duration_in_scaler.transform(in_feats)
+    
+    #継続長の予測
+    #(T, D)→(1, T, D)に変換．1はバッチサイズ（1系列だけ）で-1は残りの長さ（ここではT=音素数）を表し，in_feats.shape[-1]は特徴量の次元数を示す．
+    x = torch.from_numpy(in_feats).to(device).view(1, -1, in_feats.shape[-1])
+    #モデルにx（入力テンソル(1, T, D）と時系列長Tを渡す．
+    #sqeezeで余計な先頭次元を除去する．
+    pred_durations = duration_model(x, [x.shape[1]]).sqeeze(0).cpu().data.numpy()
+    
+    #予測された継続長に対して，正規化の逆変換を行う．
+    #例えば平均と標準偏差を元に戻すと，[0.3, -1.2, 0.8]→[15, 4, 20]になる．
+    pred_durations = duration_out_scaler.inverse_transform(pred_durations)
+    
+    #閾値処理（音素継続長が0になることを防ぐ）
+    pred_durations[pred_durations <= 0] = 1
+    #整数丸め込み
+    pred_durations = np.round(pred_durations)
+    
+    return pred_durations
+# %%
+#code6.25
+from ttslearn.dnntts.multistream import get_windows, multi_stream_mlpg
+
+@torch.no_grad()
+def predict_acoustic(
+    device, #cpu or cuda
+    labels, #フルコンテキストラベル
+    acoustic_model, #音響モデル
+    acoustic_config, #音響モデルの設定
+    acoustic_in_scaler, #音響特徴量の正規化用StandardScaler
+    acoustic_out_scaler, #音響特徴量の正規化用StandardScaler
+    binary_dict, #二値特徴量を抽出する正規表現
+    numeric_dict, #数値特徴量を抽出する正規表現
+    mlpg=True, #MLPGを使用するかどうか
+):
+    
+    #フレーム単位の言語特徴量の抽出
+    in_feats = fe.linguistic_features(labels, binary_dict, numeric_dict, add_frame_features=True, subphone_features="coarse_coding")
+    #正規化
+    in_feats = acoustic_in_scaler.transform(in_feats)
+    
+    #音響特徴量の予測
+    x = torch.from_numpy(in_feats).float().to(device).view(1, -1, in_feats.shape[-1])
+    pred_acoustic = acoustic_model(x, [x.shape[1]]).squeeze(0).cpu().data.numpy()
+    
+    #予測された音響特徴量に対して，正規化の逆変換を行う．
+    pred_acoustic = acoustic_out_scaler.inverse_transform(pred_acoustic)
+    
+    #パラメータ生成アルゴリズム(MLPG)の実行
+    #継続長モデルとの差で，音響特徴量の動的特徴量を静的特徴量を生成．
+    #multi_stream_mlpgはストリームごとにパラメータ生成を行う（このとき分散を必要とする）．
+    if mlpg and np.any(acoustic_config.has_dynamic_features):
+        # (T, D_out) -> (T, static_dim)
+        pred_acoustic = multi_stream_mlpg(pred_acoustic, acoustic_out_scaler.var_, get_windows(acoustic_config.num_windows), acoustic_config.stream_sizes, acoustic_config.has_dynamic_features)
+        
+    return pred_acoustic
+        
 # %%
