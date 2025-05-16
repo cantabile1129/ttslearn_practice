@@ -476,7 +476,7 @@ def get_data_loaders(data_config, collate_fn):
     return data_loaders
 # %%
 #code6.20
-!pip install tensorboard
+#!pip install tensorboard
 
 import torch
 #学習経過の可視化
@@ -536,6 +536,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
 from hydra.utils import to_absolute_path
+from hydra import initialize, compose
 
 import sys
 sys.path.append("./ttslearn")
@@ -764,4 +765,69 @@ def predict_acoustic(
         
     return pred_acoustic
         
+# %%
+#code6.26
+from nnmnkwii.postfilters import merlin_post_filter
+from ttslearn.dnntts.multistream import get_static_stream_sizes, split_streams
+
+def gen_waveform(
+    sample_rate, #サンプリング周波数
+    out_feats, #音響特徴量
+    stream_sizes, #ストリームサイズ
+    has_dynamic_features, 
+    num_windows=3,
+    post_filter=False, #フォルマント強調のポストフィルタを使うかどうか
+):
+    #静的特徴量の次元数を取得
+    if np.any(has_dynamic_features):
+        static_stream_sizes = get_static_stream_sizes(stream_sizes, has_dynamic_features, num_windows)
+    else:
+        static_stream_sizes = stream_sizes
+        
+    #結合された音響特徴量をストリームごとに分離
+    mgc, lf0, vuv, bap = split_streams(out_feats, static_stream_sizes)
+    fftlen = pyworld.get_cheaptrick_fft_size(sample_rate)
+    alpha = pysptk.utils.mcepalpha(sample_rate)
+    
+    #フォルマント強調のポストフィルタ
+    #統計的パラメトリック音声合成では，音響特徴量が過剰に平滑化され，劣化することがある．
+    if post_filter:
+        mgc = merlin_post_filter(mgc, alpha)
+        
+    #音響特徴量を音声パラメータに変換
+    #メルケプストラム→スペクトル包絡
+    spectrogram = pysptk.mc2sp(mgc, fftlen=fftlen, alpha=alpha)
+    #帯域非周期性指標→非周期性指標
+    aperiodicity = pyworld.decode_aperiodicity(bap.astype(np.float64), sample_rate, fftlen)
+    f0 = lfo.copy()
+    f0[vuv < 0.5] = 0
+    f0[np.nonzero(f0)] = np.exp(f0[np.nonzero(f0)])
+    
+    #WORLDボコーダを利用して音声生成
+    gen_wav = pyworld.synthesize(f0.flatten().astype(np.float64), spectrogram.astype(np.float64), aperiodicity.astype(np.float64), sample_rate)
+    
+    return gen_wav
+
+# %%
+#code6.stage-6
+#コマンドラインではなくセルで実行できるように調整
+#notionの通りステージが-1から6まであり，順番に実行．
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "6", "--stop-stage", "6"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/dnntts"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+
 # %%
