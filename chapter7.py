@@ -150,4 +150,69 @@ class ConvInUpsampleNetwork(nn.Module):
       return self.upsample(self.conv_in(c))
 # %%
 #code7.9
+#1×1の畳み込みは，チャンネル数を変換するために使う．
+def Conv1d1x1(in_channels, out_channels, bias=True):
+   return nn.Conv1d(in_channels, out_channels, kernel_size=1, padding=0, dilation=1, bias=bias)
 
+#%%
+#code7.10
+#各コードがnotionの写真のどこに対応しているかを参照すること．
+class ResSkipBlock(nn.Module):
+   def __init__(
+      self,
+      residual_channels, 
+      gate_channels, 
+      kernel_size, 
+      skip_out_channels,
+      dilation=1,
+      cin_channels=80, #条件特徴量の次元数だけど，見るからに80次元のメルスペクトログラム．
+      *args, #リストやタプルのアンパック
+      **kwargs #辞書などキーワード引数のアンパック
+   ):
+      super().__init__()
+      self.padding=(kernel_size-1)*dilation
+      
+      #1次元膨張畳み込み（dilation==1のときは通常の1次元畳み込み）
+      self.conv=nn.Conv1d(residual_channels, gate_channels, kernel_size, padding=self.padding, dilation=dilation, *args, **kwargs)
+      
+      #local conditioning用の1×1 convolution
+      self.conv1x1c=Conv1d1x1(cin_channels, gate_channels, bias=False)
+      
+      #ゲートつき活性化関数のために，1次元畳み込みの出力は2分割されることに注意．
+      gate_out_channels=gate_channels//2
+      self.conv1x1_out=Conv1d1x1(gate_out_channels, residual_channels)
+      self.conv1x1_skip=Conv1d1x1(gate_out_channels, skip_out_channels)
+      
+   def forward(self, x, c):
+      #残差接続用に入力を保持する．
+      residual=x
+      
+      #1次元畳み込み．[batch, channel, time]の形状を持つ3次元テンソル．
+      splitdim=1
+      x=self.conv(x)
+      #因果性を保証するために，出力をシフトとする．
+      x=x[:, :, :-self.padding]
+      
+      #チャンネル方向で出力を分割する．
+      a, b=x.split(x.size(1)//2, dim=1)
+      
+      #local conditioning
+      #系列長は既に等しいので，チャンネル数を合わせる．
+      c = self.conv1x1c(c)
+      ca, cb = c.split(c.size(1)//2, dim=1)
+      a, b = a+ca, b+cb
+      
+      #ゲート付き活性化関数
+      x=torch.tanh(a)*torch.sigmoid(b)
+      
+      #スキップ接続用の出力を計算
+      #後ほど複数ブロック分化さんするため．
+      s=self.conv1x1_skip(x)
+      
+      #残差接続の要素和を行う前に，次元数を合わせる．
+      x=self.conv1x1_out(x)
+      
+      x = x+residual
+      
+      return x, s
+# %%
