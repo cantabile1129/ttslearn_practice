@@ -218,6 +218,9 @@ class ResSkipBlock(nn.Module):
       return x, s
 # %%
 #code7.11
+import torch
+import torch.nn as nn
+
 class WaveNet(nn.Module):
    def __uinit__(
       self,
@@ -267,3 +270,85 @@ class WaveNet(nn.Module):
       
 #%%
 #code7.12
+#WaveNetクラスのメソッド
+def forward(self, x, c):
+   #量子化された離散値列からone-hotベクトルに変換
+   #(B, T) -> (B, T, out_channels) -> (B, out_channels, T)
+   x=F.one_hot(x, num_classes=self.out_channels).transpose(1, 2).float()
+   
+   #条件つけ特徴量のアップサンプリング
+   c=self.upsample_net(c)
+   
+   #One-hotベクトルの次元（out_channels）から隠れ層の次元（residual_channels）に変換
+   x=self.first_conv(x)
+   #メインの畳み込み層の処理
+   #各層におけるスキップ接続の出力を加算して保持
+   skip=0
+   for f in self.main_conv_layers:
+      x, s=f(x, c)
+      skip+=s
+      
+   #スキップ接続の和を入力として，出力を計算
+   x=skips
+   for f in self.last_conv_layers:
+      x=f(x)
+      
+   #NOTE:出力を確立値として解釈する場合にはsoftmaxが必要だが，学習時にはnn.CrossEntropyLossの計算においてs
+# %%
+#code7.13
+#WaveNetクラスのメソッド
+def inference(self, c, num_time_steps=100, tqdm=lambda x: x):
+   B=c.shape[0]
+   
+   #local conditioning
+   #(B, C, T)
+   c=self.upsample_net(c)
+   #(B, C, T) -> (B, T, C)
+   c=c.tranpose(1, 2).contiguoius()
+   
+   outputs=[]
+   
+   #自己回帰生成における初期値
+   current_input=torch.zeros(B, 1, self.out_channels).to(c.device)
+   current_input[:, :, int(mulaw_quantize(0))]=1
+   
+   if tqdm is None:
+      ts =range(num_time_steps)
+   else:
+      ts=tqdm(range(num_time_steps))
+      
+   #逐次的に生成
+   for t in ts:
+      #時刻tにおける入力は，時刻t-1における出力
+      if t>0:
+         current_input=outputs[-1]
+         
+      #時刻tにおける条件付け特徴量
+      ct=c[:, t, :].unsqueeze(1)
+      
+      x=current_input
+      
+      x=self.first_conv.incremental_forward(x)
+      skips=0
+      for f in self.main_conv_layers:
+         x, h=f.incremental_forward(x, ct)
+         skips += h
+      x=skips
+      for f in self.last_conv_layers:
+         if hasattr(f, "incremental_forward"):
+            x=f.incremental_forward(x)
+         else:
+            x=f(x)
+      #Softmaxにより，出力をカテゴリカル分布のパラメータに変換
+      x=F.softmax(x.view(B, -1), dim=1)
+      #カテゴリカル分布からサンプリング
+      x=torch.distributions.OneHotCategorical(x).sample()
+      outputs+=[x.data]
+      
+   #T × B × Cの形状を持つテンソルを返す．
+   outputs=torch.stack(outputs)
+   #B × C × Tの形状に変換
+   outputs=outputs.transpose(0, 1).tranpose(1, 32).contiguous()
+   
+   return outputs
+#%%
