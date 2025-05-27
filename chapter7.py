@@ -180,6 +180,7 @@ class ResSkipBlock(nn.Module):
       
       #ゲートつき活性化関数のために，1次元畳み込みの出力は2分割されることに注意．
       gate_out_channels=gate_channels//2
+      
       self.conv1x1_out=Conv1d1x1(gate_out_channels, residual_channels)
       self.conv1x1_skip=Conv1d1x1(gate_out_channels, skip_out_channels)
       
@@ -216,3 +217,53 @@ class ResSkipBlock(nn.Module):
       
       return x, s
 # %%
+#code7.11
+class WaveNet(nn.Module):
+   def __uinit__(
+      self,
+      out_channels=256, #出力のチャネル数
+      layers=30, #レイヤー数
+      stacks=3, #畳み込みブロック数
+      residual_channels=64, #残差接続のチャネル数
+      gate_channels=128, #ゲートのチャネル数
+      skip_out_channels=64, #スキップ接続のチャネル数
+      kernel_size=2, #1次元畳み込みのカーネルサイズ
+      cin_channels=80, #条件付け特徴量のチャネル数
+      upsample_scales=None, #アップサンプリングスケール
+      aux_context_window=0, #アップサンプリング時に参照する近傍フレーム数
+   ):
+      super().__init__()
+      self.out_channels=out_channels
+      self.cin_channels=cin.channels
+      self.aux_context_window=aux_context_window
+      if upsample_scales is None:
+         upsample_scales=[10, 8]
+      self.upsample_scales=upsample_scales
+      
+      self.first_conv=Conv1d1x1(out_channels, residual_channels)
+      
+      #メインとなる畳み込み層
+      self.main_conv_layers=nn.ModuleList()
+      layers_per_stack=layers//stacks
+      for layer in range(layers):
+         dilation=2**(layer%layers_per_stack)
+         conv=ResSkipBlock(residual_channels, gate_channels, kernel_size, skip_out_channels, dilation=dilation, cin_channels=cin_channels)
+         self.main_conv_layers.append(conv)
+         
+      #スキップ接続の和から波形への変換
+      self.last_conv_layers=nn.ModuleList(
+         [
+            nn.ReLU(), 
+            Conv1d1x1(skip_out_channels, skip_out_channels),
+            nn.ReLU(),
+            Conv1d1x1(skip_out_channels, out_channels),
+         ]
+      )
+      
+      #フレーム単位の特徴量をサンプル単位にアップサンプリング
+      self.upsample_net=ConvInUpsampleNetwork(
+         upsample_scales, cin_channels, aux_context_window
+      )
+      
+#%%
+#code7.12
