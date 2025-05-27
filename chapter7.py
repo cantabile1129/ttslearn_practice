@@ -297,19 +297,25 @@ def forward(self, x, c):
 # %%
 #code7.13
 #WaveNetクラスのメソッド
+#逐次的に波形を出力．
 def inference(self, c, num_time_steps=100, tqdm=lambda x: x):
+   #バッチサイズ
    B=c.shape[0]
    
    #local conditioning
    #(B, C, T)
    c=self.upsample_net(c)
    #(B, C, T) -> (B, T, C)
-   c=c.tranpose(1, 2).contiguoius()
+   #contiguousがあるとメモリ上のレイアウトを連続的になり，.view()との併用で必要になる．
+   c=c.transpose(1, 2).contiguous()
    
    outputs=[]
    
    #自己回帰生成における初期値
+   #最初の入力（t=0）として与えるone-hotベクトル．
+   # 全ゼロで形状は[B，1，C]（ある一瞬だからtは1次元．）
    current_input=torch.zeros(B, 1, self.out_channels).to(c.device)
+   #無音（0）の量子化されたカテゴリのインデックスに1を代入しているので，無音のone-hotベクトルを作る．
    current_input[:, :, int(mulaw_quantize(0))]=1
    
    if tqdm is None:
@@ -322,15 +328,18 @@ def inference(self, c, num_time_steps=100, tqdm=lambda x: x):
       #時刻tにおける入力は，時刻t-1における出力
       if t>0:
          current_input=outputs[-1]
-         
-      #時刻tにおける条件付け特徴量
+      
+      #時刻tにおける条件付け特徴量ベクトルは[B, C]だがunsqueeze(1)で[B, 1, C]に変形．
       ct=c[:, t, :].unsqueeze(1)
       
+      #入力(B, 1, C)
       x=current_input
       
+      #効率の良いキャッシュを利用した計算
       x=self.first_conv.incremental_forward(x)
       skips=0
       for f in self.main_conv_layers:
+         #xは各ブロックにおける出力で，hはskip connection出力である．
          x, h=f.incremental_forward(x, ct)
          skips += h
       x=skips
@@ -339,16 +348,58 @@ def inference(self, c, num_time_steps=100, tqdm=lambda x: x):
             x=f.incremental_forward(x)
          else:
             x=f(x)
-      #Softmaxにより，出力をカテゴリカル分布のパラメータに変換
+      #Softmaxにより，出力をカテゴリカル分布（量子化された音の確率分布）のパラメータに変換．
+      #出力の形を[B, C]に変形．-1は自動計算を意味する．dim＝1で行ごとに列方向でsoftmaxを計算．
       x=F.softmax(x.view(B, -1), dim=1)
-      #カテゴリカル分布からサンプリング
+      #カテゴリカル分布からサンプリング．確率ベクトルxについて，多値分類（1個だけ1になる）分布を定義し，one-hotベクトルをサンプリング．
       x=torch.distributions.OneHotCategorical(x).sample()
+      #勾配追跡なしで保存．
       outputs+=[x.data]
       
-   #T × B × Cの形状を持つテンソルを返す．
+   #T × B × Cの形状を持つテンソルを返す．stackで次元を1つ増やすことでテンソルを結合．
    outputs=torch.stack(outputs)
    #B × C × Tの形状に変換
-   outputs=outputs.transpose(0, 1).tranpose(1, 32).contiguous()
+   outputs=outputs.transpose(0, 1).tranpose(1, 2).contiguous()
    
    return outputs
 #%%
+#code7.14
+from ttslearn.wavenet import WaveNet
+wavenet=WaveNet(out_channels=256, layers=2, stacks=1, kernel_size=2, cin_channels=64)
+
+#%%
+#code7.15
+import torch
+
+#0から255までの値を持つ適当な入力信号
+x=torch.randint(0, 255, (16, 16000))
+#フレームシフトを80サンプルとして，64次元の条件付け特徴量を生成する．
+c=torch.rand(16, 64, 16000//80)
+
+print("入力のサイズ:", tuple(x.shape))
+print("条件付け特徴量のサイズ:", tuple(c.shape))
+
+x_hat=wavenet(x, c)
+
+#アップサンプリングの動作確認のために，条件付け特徴量のアップサンプリングのみ実行する．
+c_up=wavenet.upsample_net(c)
+
+print("アップサンプリングされた条件付け特徴量のサイズ:", tuple(c_up.shape))
+print("WaveNetの出力のサイズ:", tuple(x_hat.shape))
+# %%
+#code7.16
+#WaveNetの出力からの負の対数尤度の計算
+#x: (16, 16000), x_hat: (16, 256, 16000)
+import torch.nn as nn
+from torch.nn import functional as F
+log_prob=F.log_softmax(x_hat, dim=1)
+#自己回帰性を保つために，出力を時間方向に1つシフトする．時刻t+1を予測するのに時刻tまでの入力を使うから．
+nll=nn.NLLLoss()(log_prob[:, :, :-1], x[:, 1:])
+
+#%%
+#code7.17
+#x:(16, 16000), x_hat:(16, 256, 16000)
+ce_loss=nn.CrossEntropyLoss()(x_hat[:, :, :-1], x[:, 1:])
+
+
+# %%
