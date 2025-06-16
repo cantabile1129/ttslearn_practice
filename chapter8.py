@@ -79,14 +79,16 @@ from nnmnkwii.preprocessing import interp1d
 from ttslearn.dsp import f0_to_lf0
 
 def world_log_f0_vuv(x):
+   #フレーム数だけの配列があり，timeaxisはタイムスタンプ（ex.)[0.000, 0.005, ...]）
    f0, timeaxis=pyworld.dio(x, sr)
    vuv=(f0>0).astype(np.float32)
    
    #連続対数基本周波数
    lf0=f0_to_lf0(f0)
+   #interp1dは，Unvoicedが0になりlog(0)がNaNになるので，線形補間している．
    lf0=interp1d(lf0)
    
-   #連続対数基本周波数と有声/無声フラグを2次元の行列の形にしておく．
+   #連続対数基本周波数と有声/無声フラグを2次元の行列の形にしておく．delta_features()やnp.hstack()のために[T, 1]の形にする．
    lf0=lf0[:, np.newaxis] if len(lf0.shape)==1 else lf0
    vuv=vuv[:, np.newaxis] if len(vuv.shape)==1 else vuv
    
@@ -98,7 +100,7 @@ def world_log_f0_vuv(x):
    ]
    lf0=delta_features(lf0, windows)
    
-   #全ての特徴量を結合
+   #全ての特徴量を結合．lf0の[T, 3]とvuv[T, 1]を結合して[T, 4]の行列にする．
    feats=np.hstack([lf0, vuv]).astype(np.float32)
    
    return feats
