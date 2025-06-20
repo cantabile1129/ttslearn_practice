@@ -273,3 +273,233 @@ print(result.stdout)
 print("\n標準エラー:")
 print(result.stderr)
 # %%
+#code8.5
+#conf/train_dnn/model/duration_rnn.yamlに記載あり．
+
+#%%
+#code8.stage5
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "5", "--stop-stage", "5"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/wavenet"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+# %%
+#code8.6
+#conf/train_dnn/model/logf0_rnn.yamlに記載あり．
+
+#%%
+#code8.stage6
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "6", "--stop-stage", "6"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/wavenet"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+# %%
+#code8.7
+import torch
+
+#batchは(条件特徴量/c, 波形/x)のタプルのリスト
+#max_time_framesは切り出す最大のフレーム数
+#hop_sizeは1フレームに対応する波形のサンプル数（80なら5ms）
+#aux_context_windowで時間コンテキストを与える．
+def collate_fn_wavenet(batch, max_time_frames=100, hop_size=80, aux_context_window=2):
+   #切り出す波形の長さ（サンプル単位）
+   max_time_steps=max_time_frames*hop_size
+   xs, cs=[b[1] for b in batch], [b[0] for b in batch]
+   
+   #条件付け特徴量の開始位置をランダムに抽出したあと（start_frames），それにそれに対応する短い音声波形を切り出す．
+   #ランダムにすることでデータの「多様な部分」から切り出せるため、汎化性能が向上する．
+   c_lengths=[len(c)for c in cs]
+   start_frames=np.array([np.random.randint(aux_context_window, cl-aux_context_window-max_time_frames)for cl in c_lengths])
+   x_starts=start_frames*hop_size
+   x_ends=x_starts+max_time_steps
+   c_starts=start_frames-aux_context_window
+   c_ends=c_starts+max_time_steps+aux_context_window
+   #1ループでx[s:e]をそれぞれ抽出できる．この時点ではx_batchは長さBのリスト．
+   """x_batch = [
+    xs[0][x_starts[0]:x_ends[0]],  # → 長さ8000
+    xs[1][x_starts[1]:x_ends[1]],  # → 長さ8000
+    xs[2][x_starts[2]:x_ends[2]]   # → 長さ8000
+   ]"""
+
+   x_batch=[x[s:e]for x, s, e in zip(xs, x_starts, x_ends)]
+   c_batch=[c[s:e]for c, s, e in zip(cs, c_starts, c_ends)]
+   
+   #numpy.ndarrayのリスト型からtorch.Tensor型に変換します
+   x_batch=torch.tensor(x_batch, dtype=torch.long) #(B, T)
+   c_batch=torch.tensor(c_batch, dtype=torch.float).transpose(2, 1) #(B, C, T')
+   
+   return x_batch, c_batch
+
+
+# %%
+#code8.8
+from pathlib import Path
+from functools import partial
+
+from chapter8 import collate_fn_wavenet
+
+#in_paths, out_pathsは入力・出力の特徴量のファイルパスのリストです．
+dataset=Dataset(in_paths, out_paths)
+collate_fn=partial(collate_fn_wavenet, max_time_frames=100, hop_size=80, aux_context_window=0)
+data_loader=torch.utils.data.DataLoader(dataset, batch_size=8, collate_fn=collate_fn, num_workers=1)
+
+wavs, feats=next(iter(data_loader))
+
+print("音声波形のサイズ:", tuple(wavs.shape))
+print("条件付け特徴量のサイズ:", tuple(feats.shape))
+# %%
+#code8.9
+def moving_average_(model, model_test, beta=0.9999):
+   for param, param_test in zip(model.parameters(), model_test.parameters()):
+      param_test.data=torch.lerp(param_test.data, param.data, beta)
+# %%
+#code8.10
+from ttslearn.wavenet import WaveNet
+from torch import optim
+from functools import partial
+
+#動作確認用:層の数を減らした小さなWaveNet
+ToyWaveNet=partial(WaveNet, out_channels=256, layers=2, stacks=1, kernel_size=2, cin_channels=333)
+
+model=ToyWaveNet()
+#モデルパラメータの指数移動平均
+model_ema=ToyWaveNet()
+model_ema.load_state_dict(model.state_dict())
+
+optimizer=optim.Adam(model.parameters(), lr=0.01)
+
+#gammaは学習率の減衰係数
+lr_scheduler=optim.lr_scheduler.StepLR(optimizer, gamma=0.5, step_size=100000)
+# %%
+#code8.11
+#DataLoaderを用いた未知バッチの作成:ミニバッチごとに処理する．
+for x, c in data_loader:
+   #順伝播の計算
+   x_hat=model(x, c)
+   #負の対数尤度の計算
+   loss=nn.CrossEntropyLoss()(x_hat[:, :, :-1], x[:, 1:]).mean()
+   #optimizerに蓄積された勾配をリセット
+   optimizer.zero_grad()
+   #誤差の逆伝播の計算
+   loss.backward()
+   #パラメータの更新
+   optimizer.step()
+   #指数移動平均の更新
+   moving_average_(model, model_ema)
+   #学習率スケジューラの更新
+   lr_scheduler.step()
+   
+# %%
+#code8.12
+#conf/train_wavenet/model/wavenet_sr16k_mulaw256.yamlに記載あり．
+
+#%%
+#code8.stage7
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "7", "--stop-stage", "7"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/wavenet"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)
+# %%
+#code8.13
+from ttslearn.dsp import inv_mulaw_quantize
+import numpy as np
+import torch
+from tqdm import tqdm
+
+
+@torch.no_grad()
+def gen_waveform(
+   device, #cpu or cuda
+   labels, #フルコンテキストラベル
+   logf0_vuv, #連続対数基本周波数と有声/無声フラグ
+   wavenet_model, #学習済みWaveNet
+   wavenet_in_scaler, #条件特徴量の正規化用StandardScaler
+   binary_dict, #二値特徴量を抽出する正規表現
+   numeric_dict, #数値特徴量を抽出する正規表現
+   tqdm=tqdm, #プログレスバー
+):
+   #フレーム単位の言語特徴量の抽出
+   in_feats=fe.linguistic_features(labels, binary_dict, numeric_dict, add_frame_features=True, subphone_features="coarse_coding")
+   #フレーム単位の言語特徴量と対数連続基本周波数・有声/無声フラグを結合
+   in_feats=np.hstack([in_feats, logf0_vuv])
+   
+   #特徴量の正規化
+   in_feats=wavenet_in_scaler.transform(in_feats)
+   
+   #条件付け特徴量をnumpy.ndarrayからtorch.Tensorに変換
+   c=torch.from_numpy(in_feats).float(),to(device)
+   #(B, T, C) -> (B, C, T')に変換
+   c=c.view(1, -1, c.size(-1)).transpose(1, 2)
+   
+   #音声波形の長さを計算
+   upsample_scale=np.prod(wavenet_model.upsample_scales)
+   
+   time_steps=(C.shape[-1]-wavenet_model.aux_context_window*2)*upsample_scale
+   #WaveNetによる音声波形の生成
+   gen_wave=wavenet_model.inference(c, time_steps=time_steps, tqdm=tqdm)
+   
+   #One-hotベクトルから1次元の信号に変換
+   gen_wave=gen_wave.max(1)[1].float().cpu().numpy().reshape(-1)
+   
+   #mu-law量子化の逆変換
+   gen_wave=inv_mulaw_quantize(gen_wave, wavenet_model.out_channels-1)
+   
+   return gen_wave
+   
+# %%
+#code8.stage8
+import subprocess
+import os
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "8", "--stop-stage", "8"]
+#確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/wavenet"
+
+# 実行
+result = subprocess.run(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+# 標準出力と標準エラー出力の確認
+print("標準出力:")
+print(result.stdout)
+
+print("\n標準エラー:")
+print(result.stderr)

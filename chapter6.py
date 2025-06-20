@@ -1,7 +1,7 @@
 #%%
 #code6-0
-!pip install jupyterlab
-!pip install ttslearn
+#!pip install jupyterlab
+#!pip install ttslearn
 
 #%%
 #code6.1
