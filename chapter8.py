@@ -503,3 +503,4 @@ print(result.stdout)
 
 print("\n標準エラー:")
 print(result.stderr)
+# %%
