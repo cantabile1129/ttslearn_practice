@@ -420,6 +420,7 @@ for x, c in data_loader:
 
 #%%
 #code8.stage7
+"""
 import subprocess
 import os
 
@@ -437,6 +438,29 @@ print(result.stdout)
 
 print("\n標準エラー:")
 print(result.stderr)
+"""
+
+import subprocess
+import os
+from tqdm import tqdm
+
+# 実行したいシェルスクリプトのコマンド
+command = ["./run.sh", "--stage", "7", "--stop-stage", "7"]
+
+# 確実に絶対パスで指定
+working_dir = "/home/takamichi-lab-pc05/ドキュメント/B4/Pythonで学ぶ音声合成/ttslearn/recipes/wavenet"
+
+# 実行（標準出力をリアルタイムに読むため Popen を使う）
+with subprocess.Popen(command, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1) as process:
+    pbar = tqdm(total=0, unit="line", dynamic_ncols=True)
+    for line in process.stdout:
+        print(line, end="")  # 普通に端末に出力
+        pbar.update(1)       # 1行読むたびに進捗を進める
+    pbar.close()
+
+    retcode = process.wait()
+    if retcode != 0:
+        print(f"\n[!] エラー終了しました（return code = {retcode}）")
 # %%
 #code8.13
 from ttslearn.dsp import inv_mulaw_quantize
@@ -465,14 +489,14 @@ def gen_waveform(
    in_feats=wavenet_in_scaler.transform(in_feats)
    
    #条件付け特徴量をnumpy.ndarrayからtorch.Tensorに変換
-   c=torch.from_numpy(in_feats).float(),to(device)
+   c=torch.from_numpy(in_feats).float().to(device)
    #(B, T, C) -> (B, C, T')に変換
    c=c.view(1, -1, c.size(-1)).transpose(1, 2)
    
    #音声波形の長さを計算
    upsample_scale=np.prod(wavenet_model.upsample_scales)
    
-   time_steps=(C.shape[-1]-wavenet_model.aux_context_window*2)*upsample_scale
+   time_steps=(c.shape[-1]-wavenet_model.aux_context_window*2)*upsample_scale)
    #WaveNetによる音声波形の生成
    gen_wave=wavenet_model.inference(c, time_steps=time_steps, tqdm=tqdm)
    
